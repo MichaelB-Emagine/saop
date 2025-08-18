@@ -1,1 +1,149 @@
-#Place-holder
+name: CI (lint + tests)
+
+on:
+  pull_request:          
+  push:
+    branches: [main]     
+
+permissions:
+  contents: read
+
+jobs:
+  # 1) Lint job (single Python)
+  lint:
+    name: Lint (ruff / black / mypy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15   # avoid hanging forever
+
+    steps:
+      # 1. Check out the repository code
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # 2. Install Python 3.11
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+         
+
+      # 3. Install Poetry to handle repo dependencies
+      - name: Install Poetry
+        run: pipx install poetry
+      # Configures poetry to use the project folder as opposed to a cache folder
+      - name: Configure venv directory
+        run: poetry config virtualenvs.in-project true
+      #Cache the Poetry venv
+      - uses: actions/cache@v4
+        with: 
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.python-version || '3.11-lint' }}-${{ hashFiles('poetry.lock') }}
+
+      - name: Install Dependencies
+        run: poetry install --no-interaction --no-ansi --no-root
+
+      #Run Pre-commit as part of the lint job
+      - name: Run Pre-commit
+        run: poetry run pre-commit run --all-files --show-diff-on-failure
+
+  # 2) Test job (matrix)
+  test:
+    name: Unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      # fail-fast: false means "keep running other matrix versions even if one fails"
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    # Service containers that run next to the job.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        ports: ["5432:5432"]  # publish container 5432 -> runner 5432
+        env:
+          POSTGRES_USER: agent
+          POSTGRES_PASSWORD: agentpw
+          POSTGRES_DB: agentdb
+        # Healthcheck so GitHub waits for DB readiness
+        options: >-
+          --health-cmd="pg_isready -U agent -d agentdb"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]  # publish container 6379 -> runner 6379
+        # Basic healthcheck to wait for Redis to be ready
+        options: >-
+          --health-cmd="redis-cli ping || exit 1"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+
+    # Env vars your tests/app use in CI (point to the services above)
+    env:
+      DATABASE_URL: postgresql+psycopg://agent:agentpw@localhost:5432/agentdb
+      REDIS_URL: redis://localhost:6379/0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Configure venv directory
+        run: poetry config virtualenvs.in-project true
+
+      #Cache the Poetry venv
+      - uses: actions/cache@v4
+        with: 
+          path: .venv
+          key: venv-${{ runner.os }}-${{'3.11-lint' }}-${{ hashFiles('poetry.lock') }}
+
+      - name: Install Dependencies
+        run: poetry install --no-interaction --no-ansi --no-root
+
+      # Wait for Postgres TCP to accept connections
+      - name: Wait for Postgres socket
+        run: |
+          python - <<'PY'
+          import time, socket
+          host, port = "localhost", 5432
+          for i in range(60):
+              try:
+                  with socket.create_connection((host, port), timeout=1):
+                      break
+              except OSError:
+                  time.sleep(1)
+          else:
+              raise SystemExit("Postgres not reachable on 5432")
+          PY
+
+      - name: Run tests
+        run: |
+          poetry run pytest -q --maxfail=1 --disable-warnings \
+                 --cov=. --cov-report=term-missing:skip-covered --cov-report=xml
+
+      # Save coverage.xml as an artifact so others can download it
+      - name: Upload coverage XML
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.python-version }}
+          path: coverage.xml
+
+      # Logs for if tests fail
+      - name: Dump Postgres logs on failure
+        if: failure()
+        run: docker logs ${{ job.services.postgres.id }} || true
+      - name: Dump Redis logs on failure
+        if: failure()
+        run: docker logs ${{ job.services.redis.id }} || true
