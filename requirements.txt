@@ -1,0 +1,59 @@
+```
+# --- Core agent orchestration (LangGraph + LLM clients) ---
+langgraph
+langchain-core
+langchain-openai          # OpenAI client via LangChain
+litellm                   # Optional: multi-vendor routing + cost tracking
+
+# --- MCP (Model Context Protocol) client ---
+mcp                       # Python SDK for Model Context Protocol
+
+# --- A2A HTTP server + UI (FastAPI/Starlette) ---
+fastapi
+starlette
+uvicorn[standard]
+orjson                    # Faster JSON responses
+python-multipart          # File uploads (YAML agent specs)
+pydantic
+pydantic-settings         # Env-based config
+PyYAML                    # YAML agent templates/configs
+typer                     # CLI for scaffolding/versioning
+httpx                     # Async HTTP calls (tooling, callbacks)
+sse-starlette             # Server-Sent Events for streaming console
+aiofiles                  # Async file I/O (uploads/logs)
+
+# --- AuthN/AuthZ & security (OAuth2 / JWT / RBAC) ---
+Authlib                   # OAuth2 (auth code & client creds)
+python-jose[cryptography] # JWT signing/validation
+passlib[bcrypt]           # Password hashing if needed for admin users
+casbin                    # Role-Based Access Control
+python-dotenv             # .env support
+
+# --- Observability: OpenTelemetry + Prometheus ---
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-requests
+opentelemetry-instrumentation-httpx
+opentelemetry-instrumentation-logging
+opentelemetry-instrumentation-grpc
+prometheus-client
+prometheus-fastapi-instrumentator
+
+# --- Storage / persistence (checkpoints, caching) ---
+psycopg[binary]           # Postgres backend for LangGraph checkpoints
+redis                     # Redis cache + memoization (async supported in v5)
+
+# --- Optional transport / APIs ---
+grpcio                    # gRPC transport option for A2A
+grpcio-tools
+
+# --- Testing, retries, misc quality-of-life ---
+tenacity                  # Robust retries for flaky tool calls
+structlog                 # Structured logging
+
+# --- Type helpers (sometimes required by newer libs) ---
+typing-extensions
+
+```

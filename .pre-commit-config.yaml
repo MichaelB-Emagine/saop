@@ -1,7 +1,7 @@
 repos:
   # Basic sanity checks (YAML, TOML, trailing whitespace, etc.)
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0   # latest that works under your range (>=4.3.0,<5.0.0)
+    rev: v6.0.0   # latest that works under your range (>=4.3.0,<5.0.0)
     hooks:
       - id: check-yaml
       - id: check-toml
