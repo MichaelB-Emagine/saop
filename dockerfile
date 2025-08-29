@@ -20,10 +20,15 @@ COPY pyproject.toml poetry.lock* ./
 
 RUN poetry install --no-interaction --no-ansi --no-root
 
-#Meant to just copy the text file
-COPY test.txt .
+#Bake a chosen agent
+ARG AGENT_NAME
 
+COPY agents/${AGENT_NAME} /app/agent
+
+# Runtime env for web server
+ENV A2A_HOST=0.0.0.0
+ENV A2A_PORT=8000
 EXPOSE 8000
 
-#Intended to allow us to view the container directory in the browser to ensure it's working.
-CMD ["python","-m","http.server","8000"]
+#Run the agent web service
+CMD ["poetry", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "/app/agent"]
