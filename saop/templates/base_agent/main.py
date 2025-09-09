@@ -57,8 +57,13 @@ async def lifespan(app: FastAPI):
 
     GRAPH = await build_tool_graph(ENV)
     # Enable Prometheus metrics
-    Instrumentator().instrument(app).expose(app)
     yield
+
+
+app = FastAPI(lifespan=lifespan)
+Instrumentator().instrument(app).expose(
+    app, endpoint="/metrics", include_in_schema=False
+)
 
 
 @app.get("/health")
@@ -118,7 +123,9 @@ AGENT_LATENCY = Histogram(
 )
 
 # Track cost tokens
-AGENT_COST = Counter("agent_tokens_total", "Total tokens processed by agent", ["model"])
+AGENT_COST = Counter(
+    "agent_tokens_total", "Total tokens processed by agent", ["model", "type"]
+)
 
 # Track errors
 AGENT_ERRORS = Counter(
@@ -128,8 +135,10 @@ AGENT_ERRORS = Counter(
 
 @app.post("/run", response_model=TraceResponse)
 async def run_agent(req: RunRequest):
-    if GRAPH is None:
+    if GRAPH is None or ENV is None:
         raise HTTPException(status_code=503, detail="Agent not initialized yet.")
+
+    model_name = ENV.get("MODEL_NAME") or "unknown"
 
     with AGENT_LATENCY.time():
         try:
@@ -138,7 +147,6 @@ async def run_agent(req: RunRequest):
             )
 
             messages: list[dict] = []
-            # accumulate to avoid double-counting if multiple messages have usage
             total_input_tokens = 0
             total_output_tokens = 0
 
@@ -152,34 +160,33 @@ async def run_agent(req: RunRequest):
                 if hasattr(m, "tool_call_id"):
                     entry["tool_call_id"] = getattr(m, "tool_call_id", None)
 
-                # ✅ Pull token usage from usage_metadata (if present)
                 usage = getattr(m, "usage_metadata", None)
                 if isinstance(usage, dict) and usage:
                     inp = int(usage.get("input_tokens") or 0)
                     out = int(usage.get("output_tokens") or 0)
-                    # include in the trace for debugging
                     if inp:
                         entry["input_tokens"] = inp
                         total_input_tokens += inp
                     if out:
                         entry["output_tokens"] = out
                         total_output_tokens += out
+                    # (optional) include total if present
+                    if "total_tokens" in usage:
+                        entry["total_tokens"] = int(usage["total_tokens"])
 
                 messages.append(entry)
 
-            # ✅ Increment Prometheus counters once per request
+            # increment metrics once per request
             if total_input_tokens:
-                assert ENV is not None, "ENV not initialized"
-                model_name = ENV["MODEL_NAME"]
                 AGENT_COST.labels(model=model_name, type="input").inc(
                     total_input_tokens
                 )
             if total_output_tokens:
-                assert ENV is not None, "ENV not initialized"
-                model_name = ENV["MODEL_NAME"]
                 AGENT_COST.labels(model=model_name, type="output").inc(
                     total_output_tokens
                 )
+            # if total_input_tokens or total_output_tokens:
+            #     AGENT_TOTAL_TOKENS.labels(model=model_name).inc(total_input_tokens + total_output_tokens)
 
             return TraceResponse(messages=messages)
 
