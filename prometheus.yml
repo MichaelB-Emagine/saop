@@ -9,3 +9,6 @@ scrape_configs:
  - job_name: "jaeger"
    static_configs:
     - targets: ["jaeger:14269"]
+ - job_name: "saop-agent"
+   static_configs:
+    - targets: ["app:8000"]

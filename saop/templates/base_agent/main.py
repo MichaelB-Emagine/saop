@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import json
 
+
 from pathlib import Path
+
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 import traceback
@@ -16,11 +19,15 @@ from pydantic import BaseModel
 
 from typing import Any, List, Dict
 
+from prometheus_fastapi_instrumentator import Instrumentator
+
 from agent_config import load_env_config
 
 from langgraph_tool_wrapper import build_tool_graph
 
 from langchain_core.messages import HumanMessage
+
+from prometheus_client import Counter, Histogram
 
 app = FastAPI(title="SAOP Agent Service", version="0.1.0")
 
@@ -40,8 +47,8 @@ class TraceResponse(BaseModel):
     messages: List[Dict[str, Any]]
 
 
-@app.on_event("startup")
-async def startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     """
     Build Agent when the container starts up
     """
@@ -49,6 +56,9 @@ async def startup() -> None:
     ENV = load_env_config()
 
     GRAPH = await build_tool_graph(ENV)
+    # Enable Prometheus metrics
+    Instrumentator().instrument(app).expose(app)
+    yield
 
 
 @app.get("/health")
@@ -102,32 +112,79 @@ async def agent_card():
 #         print("[/run] ERROR:", repr(e))
 #         traceback.print_exc()
 #         raise HTTPException(status_code=500, detail="Agent failed to run.")
+# Track request latency
+AGENT_LATENCY = Histogram(
+    "agent_request_latency_seconds", "Latency of agent /run requests"
+)
+
+# Track cost tokens
+AGENT_COST = Counter("agent_tokens_total", "Total tokens processed by agent", ["model"])
+
+# Track errors
+AGENT_ERRORS = Counter(
+    "agent_errors_total", "Number of failed agent requests", ["reason"]
+)
+
+
 @app.post("/run", response_model=TraceResponse)
 async def run_agent(req: RunRequest):
-    """
-    Turn a simple 'prompt' into the input structure your graph expects
-    and return the agent's final text output.
-    """
     if GRAPH is None:
         raise HTTPException(status_code=503, detail="Agent not initialized yet.")
 
-    try:
-        result = await GRAPH.ainvoke({"messages": [HumanMessage(content=req.prompt)]})
+    with AGENT_LATENCY.time():
+        try:
+            result = await GRAPH.ainvoke(
+                {"messages": [HumanMessage(content=req.prompt)]}
+            )
 
-        messages = []
-        for m in result["messages"]:
-            entry = {
-                "type": type(m).__name__,
-                "content": getattr(m, "content", None),
-            }
-            if hasattr(m, "tool_calls") and m.tool_calls:
-                entry["tool_calls"] = jsonable_encoder(m.tool_calls)
-            if hasattr(m, "tool_call_id"):
-                entry["tool_call_id"] = getattr(m, "tool_call_id", None)
-            messages.append(entry)
+            messages: list[dict] = []
+            # accumulate to avoid double-counting if multiple messages have usage
+            total_input_tokens = 0
+            total_output_tokens = 0
 
-        return TraceResponse(messages=messages)
-    except Exception as e:
-        print("[/run] ERROR:", repr(e))
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail="Agent failed to run.")
+            for m in result["messages"]:
+                entry = {
+                    "type": type(m).__name__,
+                    "content": getattr(m, "content", None),
+                }
+                if hasattr(m, "tool_calls") and m.tool_calls:
+                    entry["tool_calls"] = jsonable_encoder(m.tool_calls)
+                if hasattr(m, "tool_call_id"):
+                    entry["tool_call_id"] = getattr(m, "tool_call_id", None)
+
+                # ✅ Pull token usage from usage_metadata (if present)
+                usage = getattr(m, "usage_metadata", None)
+                if isinstance(usage, dict) and usage:
+                    inp = int(usage.get("input_tokens") or 0)
+                    out = int(usage.get("output_tokens") or 0)
+                    # include in the trace for debugging
+                    if inp:
+                        entry["input_tokens"] = inp
+                        total_input_tokens += inp
+                    if out:
+                        entry["output_tokens"] = out
+                        total_output_tokens += out
+
+                messages.append(entry)
+
+            # ✅ Increment Prometheus counters once per request
+            if total_input_tokens:
+                assert ENV is not None, "ENV not initialized"
+                model_name = ENV["MODEL_NAME"]
+                AGENT_COST.labels(model=model_name, type="input").inc(
+                    total_input_tokens
+                )
+            if total_output_tokens:
+                assert ENV is not None, "ENV not initialized"
+                model_name = ENV["MODEL_NAME"]
+                AGENT_COST.labels(model=model_name, type="output").inc(
+                    total_output_tokens
+                )
+
+            return TraceResponse(messages=messages)
+
+        except Exception as e:
+            AGENT_ERRORS.labels(reason=type(e).__name__).inc()
+            print("[/run] ERROR:", repr(e))
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail="Agent failed to run.")
