@@ -1,5 +1,12 @@
 version: '3.9'
 services:
+  otel-collector:
+      image: otel/opentelemetry-collector:latest
+      command: ["--config=/etc/otel-collector-config.yaml"] # use config file
+      volumes:
+        - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+      # ports:
+      #   - "4318:4318"
   prometheus:
     image: prom/prometheus:latest
     command: ["--config.file=/etc/prometheus/prometheus.yml"]
@@ -58,8 +65,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_TRACES_EXPORTER: otlp
+      OTEL_SERVICE_NAME: saop-agent
       MCP_BASE_URL: http://mcp:9000/mcp
     depends_on:
       prometheus:

@@ -29,7 +29,8 @@ from langchain_core.messages import HumanMessage
 
 from prometheus_client import Counter, Histogram
 
-app = FastAPI(title="SAOP Agent Service", version="0.1.0")
+from telemetry import init_tracing
+
 
 ENV = None
 GRAPH = None
@@ -52,6 +53,8 @@ async def lifespan(app: FastAPI):
     """
     Build Agent when the container starts up
     """
+    init_tracing()
+
     global ENV, GRAPH
     ENV = load_env_config()
 
@@ -60,7 +63,8 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(title="SAOP Agent Service", version="0.1.0", lifespan=lifespan)
+# app = FastAPI(lifespan=lifespan)
 Instrumentator().instrument(app).expose(
     app, endpoint="/metrics", include_in_schema=False
 )
@@ -68,7 +72,7 @@ Instrumentator().instrument(app).expose(
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "graph_ready": GRAPH is not None}
 
 
 @app.get("/.well-known/agent-card.json")

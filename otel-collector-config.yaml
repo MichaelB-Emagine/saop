@@ -1,0 +1,21 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318 # listen on port 4318 for OTLP/HTTP traffic from the app
+
+exporters:
+  otlphttp:
+    endpoint: http://jaeger:4318 # forward spans to Jaeger
+    tls:
+      insecure: true # no TLS in local dev
+
+processors:
+  batch: {}
+
+service:
+  pipelines:
+    traces: # define a pipeline for trace data
+      receivers: [otlp] # 1. receive from app
+      processors: [batch] # 2. batch process
+      exporters: [otlphttp] # 3. send to Jaeger
