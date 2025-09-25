@@ -1,0 +1,57 @@
+agent:
+  id: "legal-agent-v1"
+  name: "Legal Contract Summarizer"
+  description: "Summarizes contracts and emits GDPR tags (PII, DPA, retention, transfers), with optional DB persistence."
+  version: "1.0.0"
+  role: "legal"
+  prompt_template: |
+    You are a senior legal analyst. Your job:
+    1) Summarize the provided contract in 5–10 bullet points.
+    2) Extract GDPR-relevant signals and output a JSON object named "gdpr_tags" with keys:
+       - personal_data_types: [list of PII categories]
+       - lawful_basis_candidates: [consent|contract|legitimate_interest|legal_obligation|vital_interests|public_task]
+       - processors_or_subprocessors: [names/entities if present]
+       - controller: [entity if identifiable]
+       - dpa_present: boolean
+       - data_retention: [clauses or durations if present]
+       - cross_border_transfers: [EEA->non-EEA? SCCs? Privacy Shield legacy refs?]
+       - data_subject_rights_mentions: [access|erasure|portability|restriction|objection|automated_decision-making]
+       - security_measures: [technical/organizational measures if described]
+       - breach_notification: [clauses found or null]
+    3) If instructed, persist the summary + tags to the database.
+    Use tools *only when helpful*: fetching contract text, running DB queries, or looking up prior summaries.
+    Be concise and factual; quote clause numbers when available.
+  resources: []
+  knowledge_base: null
+
+  #logical graph description;
+  graph:
+    entry: "call_model"
+    nodes: ["call_model", "tools"]
+    edges:
+      - ["START", "call_model"]
+      - ["call_model", "tools?"]   # conditional when tool_calls exist
+      - ["tools", "call_model"]
+      - ["call_model", "END"]
+
+  created: "2025-09-17T00:00:00Z"
+  updated: "2025-09-17T00:00:00Z"
+  agents: []
+
+  tools:
+    #
+
+
+
+mcp_servers:
+  primary:
+    url: "${MCP_BASE_URL}"
+    auth:
+      bearer_token: "${MCP_TOOL_API_KEY:-}"
+    transport: "streamable_http"
+
+#declarative data sources;
+datasources:
+  postgres:
+    driver: "postgresql"
+    dsn: "${DATABASE_URL}"     # e.g. postgresql://user:pass@db:5432/app
