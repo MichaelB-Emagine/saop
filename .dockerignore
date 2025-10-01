@@ -1,0 +1,16 @@
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.mypy_cache/
+.ruff_cache/
+.git/
+.github/
+.gitignore
+
+# DO NOT exclude your source:
+!saop_core/
+!saop_mcp/
+!templates/
+!agents/

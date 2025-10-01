@@ -1,8 +1,49 @@
-# Dockerfile.mcp
+# # Dockerfile.mcp
 
+# FROM python:3.11-slim
+
+# #System deps (keep it small; curl helps with healthchecks/debug)
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     curl \
+#  && rm -rf /var/lib/apt/lists/*
+
+# ENV POETRY_VERSION=2.1.4 \
+#     POETRY_VIRTUALENVS_CREATE=false \
+#     PIP_DISABLE_PIP_VERSION_CHECK=1 \
+#     PYTHONDONTWRITEBYTECODE=1 \
+#     PYTHONUNBUFFERED=1
+
+# RUN pip install --no-cache-dir "poetry==$POETRY_VERSION"
+
+# ARG AGENT_NAME
+
+# WORKDIR /app
+
+# # Install dependencies first (cached layers)
+# COPY pyproject.toml poetry.lock* ./
+# RUN poetry install --no-interaction --no-ansi --no-root
+
+
+# COPY agents/${AGENT_NAME}/mcp_server.py \
+#      agents/${AGENT_NAME}/mcp_tools_registry.py \
+#      agents/${AGENT_NAME}/mcp_tool_defs.py \
+#      agents/${AGENT_NAME}/agent_config.py \
+#      /app/
+
+# # Optional: install your project package if the MCP imports it
+# RUN poetry install --no-interaction --no-ansi
+
+# # Defaults; Compose will override via env_file/environment
+# ENV MCP_HOST=0.0.0.0
+# ENV MCP_PORT=9000
+# EXPOSE 9000
+
+
+# # Run the MCP server (FastMCP)
+# CMD ["poetry", "run", "python", "/app/mcp_server.py"]
+# dockerfile.mcp  (MCP server image)
 FROM python:3.11-slim
 
-#System deps (keep it small; curl helps with healthchecks/debug)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
  && rm -rf /var/lib/apt/lists/*
@@ -15,29 +56,25 @@ ENV POETRY_VERSION=2.1.4 \
 
 RUN pip install --no-cache-dir "poetry==$POETRY_VERSION"
 
-ARG AGENT_NAME
-
 WORKDIR /app
 
-# Install dependencies first (cached layers)
+# Install deps first (cacheable)
 COPY pyproject.toml poetry.lock* ./
 RUN poetry install --no-interaction --no-ansi --no-root
 
+#  copy the shared core (if your tools import it)
+COPY saop/saop_core /app/saop_core
 
-COPY agents/${AGENT_NAME}/mcp_server.py \
-     agents/${AGENT_NAME}/mcp_tools_registry.py \
-     agents/${AGENT_NAME}/mcp_tool_defs.py \
-     agents/${AGENT_NAME}/agent_config.py \
-     /app/
+# copy the MCP server and legal tools
+COPY saop/saop_mcp /app/saop_mcp
 
-# Optional: install your project package if the MCP imports it
+# Optional: if your MCP code is packaged, install your project
 RUN poetry install --no-interaction --no-ansi
 
-# Defaults; Compose will override via env_file/environment
+ENV PYTHONPATH=/app
 ENV MCP_HOST=0.0.0.0
 ENV MCP_PORT=9000
 EXPOSE 9000
 
-
-# Run the MCP server (FastMCP)
-CMD ["poetry", "run", "python", "/app/mcp_server.py"]
+# Run the MCP server
+CMD ["poetry", "run", "python", "-m", "saop_mcp.mcp_server"]

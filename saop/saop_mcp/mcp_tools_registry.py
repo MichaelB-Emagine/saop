@@ -1,4 +1,4 @@
-from mcp_tool_defs import (
+from .mcp_tool_defs import (
     multiply_numbers,
     get_presidents,
     generate_random_number,

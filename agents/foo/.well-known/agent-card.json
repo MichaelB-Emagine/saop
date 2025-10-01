@@ -1,0 +1,14 @@
+{
+  "id": "legal-agent-v1",
+  "name": "Legal Contract Summarizer",
+  "version": "1.0.0",
+  "capabilities": {
+    "summarize_contracts": true,
+    "gdpr_tagging": true,
+    "db_persistence": true
+  },
+  "endpoints": {
+    "run": "/run",
+    "health": "/health"
+  }
+}

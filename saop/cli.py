@@ -77,15 +77,20 @@ def cmd_up(args: argparse.Namespace) -> None:
     """
     'saop up' -> start the stack.
     Supports --detach/-d, --build, and optional --profile.
+    Writes a temp compose env-file that defines AGENT_NAME=<agent>,
+    copies agents/<agent>/.env to project .agent.env (runtime env for the app),
+    then invokes `docker compose ... --env-file <tempfile> up ...`.
     """
     require_docker()
     ensure_agent_exists(args.agent)
 
-    # Compose env file that defines AGENT_NAME
-    with NamedTemporaryFile("w", delete=False, dir=REPO_ROOT) as tf:
+    # --- 1) Compose env-file with AGENT_NAME (used for variable interpolation) ---
+    # On Windows, NamedTemporaryFile must be opened with delete=False so docker can read it.
+    with NamedTemporaryFile("w", delete=False, dir=REPO_ROOT, encoding="utf-8") as tf:
         tf.write(f"AGENT_NAME={args.agent}\n")
-        envfile_path = tf.name
+        envfile_path = tf.name  # keep this path; we'll pass it to compose
 
+    # --- 2) Copy the agent's runtime env into .agent.env for the app container ---
     src_env = REPO_ROOT / "agents" / args.agent / ".env"
     dst_env = REPO_ROOT / ".agent.env"
     if not src_env.is_file():
@@ -93,8 +98,11 @@ def cmd_up(args: argparse.Namespace) -> None:
         raise SystemExit(1)
     shutil.copyfile(src_env, dst_env)
 
+    # --- 3) Prepare process environment for the compose subprocess ---
     env = os.environ.copy()
+    env["AGENT_NAME"] = args.agent
 
+    # --- 4) Build the compose args list ---
     compose_args = ["--env-file", envfile_path, "up"]
     if args.detach:
         compose_args.append("-d")
@@ -103,7 +111,16 @@ def cmd_up(args: argparse.Namespace) -> None:
     if args.profile:
         compose_args.extend(["--profile", args.profile])
 
-    print("AGENT_NAME for compose:", env.get("AGENT_NAME"))
+    # --- 5) Helpful logs (show both sources of truth) ---
+    print(f"AGENT_NAME for compose (process env): {env.get('AGENT_NAME')}")
+    print(f"Compose env-file: {envfile_path}")
+    try:
+        # with open(envfile_path, "r", encoding="utf-8") as f:
+        #     print("--- compose env-file contents ---\n" + f.read().rstrip() + "\n---------------------------------")
+        pass
+    except Exception:
+        pass
+
     print(
         "Compose command:",
         [
@@ -116,12 +133,20 @@ def cmd_up(args: argparse.Namespace) -> None:
             *compose_args,
         ],
     )
+
+    # --- 6) Run compose ---
     try:
+        # If run_compose does NOT automatically prepend "-f ... -p ...",
+        # change this to: run_compose("-f", str(COMPOSE_FILE), "-p", PROJECT_NAME, *compose_args, env=env, check=True)
         run_compose(*compose_args, env=env, check=True)
     finally:
+        # Always clean the temp file (Windows keeps handles until we close the process)
         if os.path.exists(envfile_path):
-            os.remove(envfile_path)
-            print(f"Cleaned up temp env file: {envfile_path}")
+            try:
+                os.remove(envfile_path)
+                print(f"Cleaned up temp env file: {envfile_path}")
+            except OSError:
+                print(f"Warning: could not remove temp env file: {envfile_path}")
 
 
 def cmd_down(args: argparse.Namespace) -> None:
@@ -174,25 +199,69 @@ def cmd_ps(args: argparse.Namespace) -> None:
     run_compose("ps", env=env, check=True)
 
 
-def scaffold_agent(agent_name: str):
-    """
-    Scaffolds a new agent directory from a template.
+# def scaffold_agent(agent_name: str):
+#     """
+#     Scaffolds a new agent directory from a template.
 
-    This function now simply copies the entire template directory,
-    ensuring all necessary files like graph.py are included.
+#     This function now simply copies the entire template directory,
+#     ensuring all necessary files like graph.py are included.
+#     """
+#     # The template directory is relative to the location of this script.
+#     template_dir = os.path.join(os.path.dirname(__file__), "templates/base_agent")
+#     repo_root = os.path.abspath(
+#         os.path.join(os.path.dirname(__file__), "..")
+#     )  # points to repo root
+#     agents_root = os.path.join(repo_root, "agents")
+#     new_agent_dir = os.path.join(agents_root, agent_name)
+
+#     if not os.path.exists(template_dir):
+#         print(f"Error: Template directory '{template_dir}' not found.")
+#         print(
+#             "Please ensure you have a 'templates/base_agent' directory with your template files."
+#         )
+#         return
+
+#     if os.path.exists(new_agent_dir):
+#         print(f"Error: Directory '{new_agent_dir}' already exists.")
+#         return
+
+#     # Use shutil.copytree to copy the entire template directory recursively.
+#     os.makedirs(agents_root, exist_ok=True)
+#     shutil.copytree(template_dir, new_agent_dir)
+#     print(f"Created new agent directory '{new_agent_dir}' from template.")
+
+#     print("\n✅ New agent scaffolded successfully!")
+#     print(f"To get started, navigate to the directory: cd {agent_name}")
+#     print("Please fill in the placeholder values in your new '.env' and YAML files.")
+
+
+def _resolve_template_dir(template_arg: str | None) -> str:
     """
-    # The template directory is relative to the location of this script.
-    template_dir = os.path.join(os.path.dirname(__file__), "templates/base_agent")
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..")
-    )  # points to repo root
+    1) CLI arg (-t/--template): name or path
+    2) SAOP_DEFAULT_TEMPLATE env var
+    3) 'base_agent' fallback
+    """
+    base_dir = os.path.dirname(__file__)
+    chosen = template_arg or os.getenv("SAOP_DEFAULT_TEMPLATE") or "base_agent"
+
+    if os.path.isabs(chosen) or any(sep in chosen for sep in (os.sep, "/")):
+        candidate = chosen  # treat as path
+    else:
+        candidate = os.path.join(base_dir, "templates", chosen)  # treat as name
+
+    return os.path.abspath(candidate)
+
+
+def scaffold_agent(agent_name: str, template: str | None = None):
+    template_dir = _resolve_template_dir(template)
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     agents_root = os.path.join(repo_root, "agents")
     new_agent_dir = os.path.join(agents_root, agent_name)
 
     if not os.path.exists(template_dir):
         print(f"Error: Template directory '{template_dir}' not found.")
         print(
-            "Please ensure you have a 'templates/base_agent' directory with your template files."
+            "Tip: pass --template <name> (under ./templates/) or --template </abs/path>."
         )
         return
 
@@ -200,14 +269,10 @@ def scaffold_agent(agent_name: str):
         print(f"Error: Directory '{new_agent_dir}' already exists.")
         return
 
-    # Use shutil.copytree to copy the entire template directory recursively.
     os.makedirs(agents_root, exist_ok=True)
     shutil.copytree(template_dir, new_agent_dir)
-    print(f"Created new agent directory '{new_agent_dir}' from template.")
-
-    print("\n✅ New agent scaffolded successfully!")
-    print(f"To get started, navigate to the directory: cd {agent_name}")
-    print("Please fill in the placeholder values in your new '.env' and YAML files.")
+    print(f"Created '{new_agent_dir}' from template '{template_dir}'.")
+    print("✅ Done. Next: cd agents/{agent_name} and review .env + agent.yaml")
 
 
 def main():
@@ -258,6 +323,17 @@ def main():
     ps_parser = subparsers.add_parser("ps", help="List project containers.")
     ps_parser.add_argument("--agent", help="Agent name.")
     ps_parser.set_defaults(func=cmd_ps)
+
+    scaffold_parser.add_argument(
+        "-t",
+        "--template",
+        type=str,
+        default=None,
+        help="Template name under ./templates/<name> or a directory path.",
+    )
+    scaffold_parser.set_defaults(
+        func=lambda a: scaffold_agent(a.agent_name, a.template)
+    )
 
     args = parser.parse_args()
 

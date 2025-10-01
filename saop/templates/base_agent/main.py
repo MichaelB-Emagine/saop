@@ -21,7 +21,7 @@ from typing import Any, List, Dict
 
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from agent_config import load_env_config
+from saop_core.agent_config import load_config
 
 from langgraph_tool_wrapper import build_tool_graph
 
@@ -29,7 +29,7 @@ from langchain_core.messages import HumanMessage
 
 from prometheus_client import Counter, Histogram
 
-from telemetry import init_tracing
+from saop_core.telemetry import init_tracing
 
 
 ENV = None
@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
     init_tracing()
 
     global ENV, GRAPH
-    ENV = load_env_config()
+    ENV = load_config()
 
     GRAPH = await build_tool_graph(ENV)
     # Enable Prometheus metrics
